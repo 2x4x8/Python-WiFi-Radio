@@ -16,7 +16,12 @@
 # http://www.adafruit.com/products/1110 RGB Negative 16x2 LCD + Keypad
 # http://www.adafruit.com/products/1115 Blue & White 16x2 LCD + Keypad
 
-import atexit, pexpect, pickle, socket, time
+import atexit
+import pexpect
+import pickle
+import socket
+import subprocess
+import time
 from Adafruit_I2C import Adafruit_I2C
 from Adafruit_MCP230xx import Adafruit_MCP230XX
 from Adafruit_CharLCDPlate import Adafruit_CharLCDPlate
@@ -24,7 +29,7 @@ from Adafruit_CharLCDPlate import Adafruit_CharLCDPlate
 
 # Constants:
 RGB_LCD      = False # Set to 'True' if using color backlit LCD
-HALT_ON_EXIT = False # Set to 'True' to shut down system when exiting
+HALT_ON_EXIT = True  # Set to 'True' to shut down system when exiting
 MAX_FPS      = 6 if RGB_LCD else 4 # Limit screen refresh rate for legibility
 VOL_MIN      = -30
 VOL_MAX      =   5
@@ -86,6 +91,72 @@ charSevenBitmaps = [
 # --------------------------------------------------------------------------
 
 
+#Error handler for expect exceptions. Outputs to LCD and gives three options to the user
+def expectError():
+	options=[]
+	options.append('Exit Pandora')
+	options.append('Reboot')
+	options.append('Shut down')
+	choice = 0
+	t = time.time()
+	lcd.clear()
+	lcd.message('Use Sel, & U/D\n' + options[choice])
+
+	while True:
+		if (time.time() - t) > 180: #In three minutes, exits program
+			if RGB_LCD: lcd.backlight(lcd.RED)
+			lcd.clear()
+			lcd.message('Exiting Pandora')
+			time.sleep(5)
+			cleanExit()
+			exit(0)
+
+		b = lcd.buttons()
+		btnUp = b & (1 << lcd.UP)
+		btnDown = b & (1 <<lcd.DOWN)
+		btnSel = b & (1 <<lcd.SELECT)
+		
+		if btnUp:
+			time.sleep(0.5)
+			if choice < 2:
+				choice += 1
+			else:
+				choice = 0
+			lcd.clear()
+			lcd.message('Use Sel, & U/D\n' + options[choice])
+		if btnDown:
+			time.sleep(0.5)
+			if choice > 0:
+				choice -= 1
+			else:
+				choice = 2
+			lcd.clear()
+			lcd.message('Use Sel, & U/D\n' + options[choice])
+		if btnSel:
+			if choice == 0: #Option to exit Pandora
+				lcd.clear()
+				lcd.message('Exiting Pandora')
+				time.sleep(5)
+				cleanExit()
+				exit(0)
+			elif choice == 1: #Option to reboot Raspberry Pi
+				lcd.clear()
+				lcd.message('Rebooting')
+				time.sleep(5)
+				cleanExit()
+				subprocess.call("sync")
+				subprocess.call("reboot")
+			elif choice == 2: #Option to shut down Raspberry Pi
+				lcd.clear()
+				lcd.message('Shutting Down')
+				time.sleep(5)
+				lcd.message('Wait 30 seconds\nto unplug...')
+				time.sleep(5)
+				cleanExit()
+				subprocess.call("sync")
+				subprocess.call(["shutdown", "-h", "now"])
+		
+
 # Exit handler tries to leave LCD in a nice state.
 def cleanExit():
     if lcd is not None:
@@ -108,6 +179,7 @@ def shutdown():
         for i in range(steps):
             pianobar.send('(')
             time.sleep(pause)
+	cleanExit()
         subprocess.call("sync")
         subprocess.call(["shutdown", "-h", "now"])
     else:
@@ -283,7 +355,16 @@ while True:
 print('Spawning pianobar...')
 pianobar = pexpect.spawn('sudo -u pi pianobar')
 print('Receiving station list...')
-pianobar.expect('Get stations... Ok.\r\n', timeout=30)
+tout = pianobar.expect('Get stations... Ok.\r\n', timeout=120) #tout is timeout return
+if tout == 1: #Timeout error handler
+	lcd.clear()
+	lcd.message('Station Timeout')
+	time.sleep(5)
+	expectError()
+if tout == 0: #No timeout, just a message to show on the LCD for a few seconds
+	lcd.clear()
+	lcd.message('Station Success!')
+	time.sleep(5)
 stationList, stationIDs = getStations()
 try:    # Use station name from last session
     stationNum = stationList.index(defaultStation)
